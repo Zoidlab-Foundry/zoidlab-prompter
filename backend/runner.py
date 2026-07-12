@@ -39,20 +39,30 @@ async def run(model_id, prompt, values):
             latency = int((time.time() - t0) * 1000)
             tokens = usage.get("total_tokens") or 0
             cost = llm.cost_estimate(model_id, tokens)
+            billing = llm.billing_mode()  # "user" (their wallet) | "owner" (shared key)
             return {"provider": model_id, "label": _label(model_id), "model": model_id, "output": text,
                     "metrics": {"token_estimate": tokens, "cost_estimate": cost, "latency_ms": latency,
-                                "quality_score": None, "risk_score": None, "live": True},
-                    "latency_ms": latency, "cost_estimate": cost, "token_estimate": tokens, "live": True}
+                                "quality_score": None, "risk_score": None, "live": True, "billing": billing},
+                    "latency_ms": latency, "cost_estimate": cost, "token_estimate": tokens, "live": True, "billing": billing}
         except Exception as e:
             # surface the error but don't crash the comparison grid
             return {"provider": model_id, "label": _label(model_id), "model": model_id,
                     "output": f"[model error] {str(e)[:200]}",
                     "metrics": {"token_estimate": 0, "cost_estimate": 0, "latency_ms": 0, "error": True},
                     "latency_ms": 0, "cost_estimate": 0, "token_estimate": 0, "error": True}
-    # mock fallback (keyless / disabled)
-    key = model_id if model_id in [p["key"] for p in mockmodels.PROVIDERS] else \
-        ("nyquest-router" if model_id == "auto" else "openai")
+    # mock fallback (keyless / disabled) — map the full model id to the right provider
+    # style by its prefix, so "anthropic/…" renders as Claude, "google/…" as Gemini, etc.
+    # (previously every non-bare id collapsed to the OpenAI style).
+    if model_id == "auto":
+        key = "nyquest-router"
+    else:
+        prefix = model_id.split("/")[0] if "/" in model_id else model_id
+        alias = {"meta-llama": "meta", "meta_llama": "meta", "llama": "meta", "mistralai": "mistral"}
+        prefix = alias.get(prefix, prefix)
+        key = prefix if prefix in mockmodels.BY_KEY else "openai"
     res = mockmodels.run(key, r["combined"], values or {}, ms)
     res["model"] = model_id
     res["label"] = _label(model_id)
+    res["billing"] = "mock"
+    res.setdefault("metrics", {})["billing"] = "mock"
     return res

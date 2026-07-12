@@ -21,7 +21,7 @@ export const api = {
   whoami: () => req<WhoAmI>("/api/whoami"),
   stats: () => req<Stats>("/api/stats"),
   filters: () => req<{ categories: any[]; statuses: any[]; risks: any[] }>("/api/filters"),
-  models: () => req<{ models: string[]; featured: string[]; live: boolean }>("/api/models"),
+  models: () => req<{ models: string[]; featured: string[]; live: boolean; billing?: string }>("/api/models"),
 
   projects: () => req<{ projects: Project[] }>("/api/projects").then((d) => d.projects),
   project: (id: string) => req<Project & { prompts: Prompt[] }>(`/api/projects/${id}`),

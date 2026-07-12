@@ -27,6 +27,14 @@ def has_key():
     return bool(_auth())
 
 
+def billing_mode():
+    """Which wallet a run bills right now: the signed-in user's key, the shared owner
+    key, or neither (mock). Reflects the per-request relay auth, so the UI can be honest."""
+    if _relay_auth.get():
+        return "user"
+    return "owner" if KEY else "mock"
+
+
 def _headers():
     return {"Authorization": f"Bearer {_auth()}", "Content-Type": "application/json"}
 

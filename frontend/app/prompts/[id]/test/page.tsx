@@ -13,6 +13,7 @@ export default function TestLab() {
   const [featured, setFeatured] = useState<string[]>([]);
   const [allModels, setAllModels] = useState<string[]>([]);
   const [live, setLive] = useState(false);
+  const [billing, setBilling] = useState<string>("mock");
   const [sel, setSel] = useState<string[]>([]);
   const [vals, setVals] = useState<Record<string, string>>({});
   const [cases, setCases] = useState<TestCase[]>([]);
@@ -26,7 +27,7 @@ export default function TestLab() {
       const tv: Record<string, string> = {}; (pr.variables || []).forEach((v) => { tv[v.name] = v.example || ""; });
       setVals(tv);
     });
-    api.models().then((m) => { setFeatured(m.featured); setAllModels(m.models); setLive(m.live); setSel(m.featured.slice(0, 4)); });
+    api.models().then((m) => { setFeatured(m.featured); setAllModels(m.models); setLive(m.live); setBilling(m.billing || (m.live ? "owner" : "mock")); setSel(m.featured.slice(0, 4)); });
     api.testCases(id).then(setCases);
   }, [id]);
 
@@ -50,9 +51,10 @@ export default function TestLab() {
       <Link href={`/prompts/${p.id}`} className="text-[12px] text-faint hover:text-dim">← {p.name}</Link>
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <h1 className="text-[22px] font-semibold">Test Lab</h1>
-        <span className={`rounded-full border px-2 py-0.5 text-[10px] ${live ? "border-ok/40 bg-ok/10 text-ok" : "border-warn/40 bg-warn/10 text-warn"}`}>{live ? "live Nyquest models · billed to your wallet" : "mock models"}</span>
+        <span className={`rounded-full border px-2 py-0.5 text-[10px] ${billing === "user" ? "border-ok/40 bg-ok/10 text-ok" : billing === "owner" ? "border-cy/40 bg-cy/10 text-cy" : "border-warn/40 bg-warn/10 text-warn"}`}>{billing === "user" ? "live Nyquest models · billed to your wallet" : billing === "owner" ? "live models · billed to the workspace key" : "mock models · no billing"}</span>
       </div>
       <p className="mt-1 text-[13px] text-dim">Run the prompt across the Nyquest models you pick and compare output, cost, latency, and quality side by side.</p>
+      <p className="mt-2 inline-block rounded-md border border-warn/40 bg-warn/10 px-2.5 py-1 text-[11.5px] text-warn">Scoring note — <b>keyword match</b> and <b>JSON validity</b> are measured from your test case. <b>quality</b>, <b>safety</b> and <b>eval overall</b> are heuristic estimates, not a real evaluation model.</p>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-[300px_1fr]">
         <div className="space-y-3">

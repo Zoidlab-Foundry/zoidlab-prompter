@@ -17,7 +17,7 @@ import exporter
 import seed
 import runner
 import llm
-from auth import owner_of, session, relay_key, tier
+from auth import owner_of, session, relay_key, tier, is_pro as auth_is_pro
 
 
 @asynccontextmanager
@@ -33,10 +33,14 @@ app = FastAPI(title="ZoidLab Prompter API", lifespan=lifespan)
 
 
 def require_owner(request: Request):
-    o = owner_of(request)
+    """Every write / model run requires a signed-in Nyquest Pro user (backend-enforced,
+    so the entitlement holds even if a request skips the frontend gate)."""
+    s = session(request)
+    o = s.get("sub") if s else None
     if not o:
         raise HTTPException(status_code=401, detail="sign_in_required")
-    s = session(request)
+    if not auth_is_pro(request):
+        raise HTTPException(status_code=403, detail="pro_required")
     db.upsert_user(o, s.get("email"), s.get("name"))
     return o
 
@@ -345,9 +349,13 @@ def test_runs(pid: str):
 
 
 @app.get("/api/models")
-async def models():
+async def models(request: Request):
+    # Reflect the SIGNED-IN USER's billing path, not the shared owner key.
+    llm.set_relay_auth(relay_key(request))
+    billing = llm.billing_mode()  # "user" | "owner" | "mock"
+    live = runner.REAL and billing in ("user", "owner")
     return {"models": await llm.list_models(), "featured": await llm.featured_models(),
-            "live": llm.has_key() and runner.REAL}
+            "live": live, "billing": billing}
 
 
 # ---- test cases ---------------------------------------------------------

@@ -2,10 +2,18 @@
 handoff (jose HS256, BUILDER_SESSION_SECRET). Same cookie the other ZoidLab apps
 use, so signing in once anywhere in *.zoidlab.ai authenticates here too."""
 import os
+import sys
 import jwt
 from fastapi import Request
 
-SECRET = os.environ.get("BUILDER_SESSION_SECRET", "dev-secret-change-me")
+_DEFAULT = "dev-secret-change-me"
+SECRET = os.environ.get("BUILDER_SESSION_SECRET", _DEFAULT)
+PRO_TIERS = {"pro", "teams", "team", "enterprise"}
+
+if SECRET == _DEFAULT:
+    print("[prompter] WARNING: BUILDER_SESSION_SECRET is unset — using an insecure "
+          "default. Session cookies are forgeable. Set a real secret before exposing this API.",
+          file=sys.stderr)
 
 
 def session(request: Request):
@@ -32,3 +40,7 @@ def relay_key(request: Request):
 def tier(request: Request):
     s = session(request)
     return (s.get("tier") if s else None) or "free"
+
+
+def is_pro(request: Request):
+    return str(tier(request)).lower() in PRO_TIERS
