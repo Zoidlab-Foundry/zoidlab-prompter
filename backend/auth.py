@@ -21,3 +21,14 @@ def session(request: Request):
 def owner_of(request: Request):
     s = session(request)
     return s.get("sub") if s else None
+
+
+def relay_key(request: Request):
+    """The user's own minted Nyquest relay key (rk claim) — bills their wallet."""
+    s = session(request)
+    return s.get("rk") if s else None
+
+
+def tier(request: Request):
+    s = session(request)
+    return (s.get("tier") if s else None) or "free"

@@ -5,6 +5,7 @@ import { SignJWT } from "jose";
 // Foundry/Builder so the .zoidlab.ai cookie is interchangeable across apps.
 const SECRET = new TextEncoder().encode(process.env.BUILDER_SESSION_SECRET || "dev-secret-change-me");
 const NYQUEST = (process.env.NYQUEST_API || "https://api.nyquest.ai").replace(/\/$/, "");
+const PRO_TIERS = (process.env.PRO_TIERS || "pro,teams").split(",").map((t) => t.trim().toLowerCase());
 const KEY_NAME = "ZoidLab Builder";
 
 export type Claims = { sub: string; email: string; name: string; tier: string; rk: string };
@@ -43,9 +44,11 @@ export async function verifyAndMint(token: string): Promise<{ claims?: Claims; e
   } catch {
     return { error: "nyquest_unreachable", status: 502 };
   }
-  // Marketplace is open to any signed-in Nyquest user (no Pro gate on browsing).
+  // Prompter is a Pro workspace — gate at sign-in.
+  const tier = String(user.tier || "free").toLowerCase();
+  if (!PRO_TIERS.includes(tier)) return { error: "pro_required", status: 403 };
   const rk = await mintRelayKey(token);
-  return { claims: { sub: user.id, email: user.email, name: user.name, tier: String(user.tier || "free"), rk }, status: 200 };
+  return { claims: { sub: user.id, email: user.email, name: user.name, tier, rk }, status: 200 };
 }
 
 export async function issueSession(claims: Claims): Promise<string> {

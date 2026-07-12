@@ -5,10 +5,14 @@ import Link from "next/link";
 import { api } from "../../../../lib/api";
 import type { Prompt, RunResult, TestCase } from "../../../../lib/types";
 
+const short = (m: string) => (m === "auto" ? "Nyquest Router" : (m.includes("/") ? m.split("/").pop()! : m).replace("-preview", ""));
+
 export default function TestLab() {
   const { id } = useParams<{ id: string }>();
   const [p, setP] = useState<Prompt | null>(null);
-  const [providers, setProviders] = useState<{ key: string; label: string }[]>([]);
+  const [featured, setFeatured] = useState<string[]>([]);
+  const [allModels, setAllModels] = useState<string[]>([]);
+  const [live, setLive] = useState(false);
   const [sel, setSel] = useState<string[]>([]);
   const [vals, setVals] = useState<Record<string, string>>({});
   const [cases, setCases] = useState<TestCase[]>([]);
@@ -22,7 +26,7 @@ export default function TestLab() {
       const tv: Record<string, string> = {}; (pr.variables || []).forEach((v) => { tv[v.name] = v.example || ""; });
       setVals(tv);
     });
-    api.providers().then((ps) => { setProviders(ps); setSel(ps.map((x) => x.key)); });
+    api.models().then((m) => { setFeatured(m.featured); setAllModels(m.models); setLive(m.live); setSel(m.featured.slice(0, 4)); });
     api.testCases(id).then(setCases);
   }, [id]);
 
@@ -32,9 +36,10 @@ export default function TestLab() {
     const tc = cases.find((c) => c.id === cid);
     if (tc) setVals({ ...vals, ...Object.fromEntries(Object.entries(tc.input_variables).map(([k, v]) => [k, String(v)])) });
   }
+  const toggle = (m: string) => setSel(sel.includes(m) ? sel.filter((x) => x !== m) : [...sel, m]);
   async function run() {
     setRunning(true); setResults(null);
-    try { const r = await api.compare(id, { variables: vals, providers: sel, test_case_id: caseId || undefined, save: true }); setResults(r.results); }
+    try { const r = await api.compare(id, { variables: vals, models: sel, test_case_id: caseId || undefined, save: true }); setResults(r.results); }
     finally { setRunning(false); }
   }
 
@@ -43,8 +48,11 @@ export default function TestLab() {
   return (
     <div className="py-8">
       <Link href={`/prompts/${p.id}`} className="text-[12px] text-faint hover:text-dim">← {p.name}</Link>
-      <h1 className="mt-3 text-[22px] font-semibold">Test Lab</h1>
-      <p className="mt-1 text-[13px] text-dim">Run the prompt across model providers and compare output, cost, latency, and quality side by side.</p>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <h1 className="text-[22px] font-semibold">Test Lab</h1>
+        <span className={`rounded-full border px-2 py-0.5 text-[10px] ${live ? "border-ok/40 bg-ok/10 text-ok" : "border-warn/40 bg-warn/10 text-warn"}`}>{live ? "live Nyquest models · billed to your wallet" : "mock models"}</span>
+      </div>
+      <p className="mt-1 text-[13px] text-dim">Run the prompt across the Nyquest models you pick and compare output, cost, latency, and quality side by side.</p>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-[300px_1fr]">
         <div className="space-y-3">
@@ -61,11 +69,17 @@ export default function TestLab() {
             </div>
           </div>
           <div className="rounded-xl border border-line bg-panel p-4">
-            <div className="mb-2 text-[11px] uppercase tracking-wider text-faint">Models</div>
+            <div className="mb-2 text-[11px] uppercase tracking-wider text-faint">Models ({sel.length})</div>
             <div className="flex flex-wrap gap-1.5">
-              {providers.map((pr) => <button key={pr.key} onClick={() => setSel(sel.includes(pr.key) ? sel.filter((k) => k !== pr.key) : [...sel, pr.key])}
-                className={`rounded-full border px-2.5 py-1 text-[11px] ${sel.includes(pr.key) ? "border-vi/60 bg-vi/15 text-ink" : "border-line text-dim"}`}>{pr.label}</button>)}
+              {Array.from(new Set([...featured, ...sel])).map((m) => (
+                <button key={m} onClick={() => toggle(m)}
+                  className={`rounded-full border px-2.5 py-1 text-[11px] ${sel.includes(m) ? "border-vi/60 bg-vi/15 text-ink" : "border-line text-dim"}`}>{short(m)}</button>
+              ))}
             </div>
+            <select value="" onChange={(e) => { if (e.target.value && !sel.includes(e.target.value)) setSel([...sel, e.target.value]); }} className={`${inp} mt-2`}>
+              <option value="">+ Add another model…</option>
+              {allModels.filter((m) => !sel.includes(m)).map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
             <button onClick={run} disabled={running || !sel.length} className="mt-3 w-full rounded-lg bg-vi px-4 py-2 text-[13px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{running ? "Running…" : `Compare ${sel.length} model${sel.length === 1 ? "" : "s"}`}</button>
           </div>
         </div>
@@ -75,20 +89,20 @@ export default function TestLab() {
             <div className="rounded-2xl border border-dashed border-line py-20 text-center text-[13px] text-faint">Pick models and run a comparison.</div>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {results.map((r) => (
-                <div key={r.provider} className="flex flex-col rounded-2xl border border-line bg-panel p-4">
+              {results.map((r, i) => (
+                <div key={r.provider + i} className={`flex flex-col rounded-2xl border p-4 ${(r as any).error ? "border-bad/40 bg-bad/5" : "border-line bg-panel"}`}>
                   <div className="mb-2 flex items-center justify-between">
-                    <span className="text-[13px] font-semibold text-ink">{r.label}</span>
-                    <span className="rounded-full bg-ok/10 px-2 py-0.5 text-[10px] text-ok">eval {r.evaluation.overall}</span>
+                    <span className="truncate text-[13px] font-semibold text-ink" title={r.model}>{r.label}</span>
+                    <span className="rounded-full bg-ok/10 px-2 py-0.5 text-[10px] text-ok">eval {r.evaluation?.overall ?? "—"}</span>
                   </div>
                   <p className="mb-3 max-h-56 overflow-auto whitespace-pre-wrap text-[12px] leading-relaxed text-dim">{r.output}</p>
                   <div className="mt-auto grid grid-cols-3 gap-1.5 border-t border-line pt-3 text-center text-[10px]">
                     <Metric label="latency" value={`${r.latency_ms}ms`} />
-                    <Metric label="cost" value={`$${r.cost_estimate.toFixed(4)}`} />
+                    <Metric label="cost" value={`$${(r.cost_estimate || 0).toFixed(4)}`} />
                     <Metric label="tokens" value={`${r.token_estimate}`} />
-                    <Metric label="quality" value={`${r.metrics.quality_score}`} />
-                    <Metric label="risk" value={`${r.metrics.risk_score}`} />
-                    <Metric label="kw match" value={`${r.evaluation.keyword_match}`} />
+                    <Metric label="quality" value={r.metrics?.quality_score != null ? `${r.metrics.quality_score}` : "—"} />
+                    <Metric label="kw match" value={`${r.evaluation?.keyword_match ?? "—"}`} />
+                    <Metric label="safety" value={`${r.evaluation?.safety ?? "—"}`} />
                   </div>
                 </div>
               ))}

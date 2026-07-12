@@ -26,8 +26,11 @@ export default function Editor() {
   const [result, setResult] = useState<RunResult | null>(null);
   const [running, setRunning] = useState(false);
   const [showVersion, setShowVersion] = useState(false);
+  const [models, setModels] = useState<string[]>([]);
+  const [live, setLive] = useState(false);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
+  useEffect(() => { api.models().then((m) => { setModels(m.models); setLive(m.live); }).catch(() => {}); }, []);
   useEffect(() => {
     api.prompt(id).then((pr) => {
       setP(pr);
@@ -69,7 +72,7 @@ export default function Editor() {
 
   async function runTest() {
     setRunning(true); setResult(null);
-    try { setResult(await api.test(p!.id, { variables: testVals, provider: p!.model_settings.provider, save: true })); }
+    try { setResult(await api.test(p!.id, { variables: testVals, model: p!.model_settings.model, save: true })); }
     catch (e: any) { setMsg(e.message); } finally { setRunning(false); }
   }
 
@@ -117,7 +120,13 @@ export default function Editor() {
             )}
           </Panel>
           <Panel title="Model settings">
-            <Field label="Provider"><select value={p.model_settings.provider} onChange={(e) => setMs({ provider: e.target.value })} className={inp}>{["nyquest-router", "openai", "anthropic", "google", "meta", "mistral"].map((x) => <option key={x}>{x}</option>)}</select></Field>
+            <Field label="Model">
+              <select value={p.model_settings.model} onChange={(e) => setMs({ model: e.target.value, provider: e.target.value === "auto" ? "nyquest-router" : (e.target.value.split("/")[0] || "nyquest-router") })} className={inp}>
+                {!models.includes(p.model_settings.model) && <option value={p.model_settings.model}>{p.model_settings.model}</option>}
+                {models.map((m) => <option key={m} value={m}>{m === "auto" ? "auto (Nyquest Router)" : m}</option>)}
+              </select>
+            </Field>
+            <Field label="Fallback model"><select value={p.model_settings.fallback_model || ""} onChange={(e) => setMs({ fallback_model: e.target.value })} className={inp}><option value="">none</option>{models.map((m) => <option key={m} value={m}>{m}</option>)}</select></Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label={`Temp ${p.model_settings.temperature}`}><input type="range" min={0} max={2} step={0.1} value={p.model_settings.temperature} onChange={(e) => setMs({ temperature: +e.target.value })} className="w-full" /></Field>
               <Field label="Max tokens"><input type="number" value={p.model_settings.max_tokens} onChange={(e) => setMs({ max_tokens: +e.target.value })} className={inp} /></Field>
@@ -157,7 +166,8 @@ export default function Editor() {
           <Panel title="Test inputs">
             {vars.length === 0 && <p className="text-[12px] text-faint">No variables to fill.</p>}
             {vars.map((v) => <Field key={v} label={v}><input value={testVals[v] || ""} onChange={(e) => setTestVals({ ...testVals, [v]: e.target.value })} className={inp} /></Field>)}
-            <button onClick={runTest} disabled={running} className="mt-2 w-full rounded-lg bg-vi px-4 py-2 text-[13px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{running ? "Running…" : "Run Test"}</button>
+            <button onClick={runTest} disabled={running} className="mt-2 w-full rounded-lg bg-vi px-4 py-2 text-[13px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{running ? "Running…" : `Run · ${p.model_settings.model === "auto" ? "Nyquest Router" : p.model_settings.model.split("/").pop()}`}</button>
+            <div className="mt-1.5 text-center text-[10px] text-faint">{live ? "live · billed to your Nyquest wallet" : "mock model"}</div>
             <Link href={`/prompts/${p.id}/test`} className="mt-2 block text-center text-[11px] text-cy hover:underline">Compare across models →</Link>
           </Panel>
           {result && (

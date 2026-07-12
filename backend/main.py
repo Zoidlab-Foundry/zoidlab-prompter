@@ -15,7 +15,9 @@ import evaluator
 import diffutil
 import exporter
 import seed
-from auth import owner_of, session
+import runner
+import llm
+from auth import owner_of, session, relay_key, tier
 
 
 @asynccontextmanager
@@ -284,47 +286,56 @@ def render_prompt(pid: str, body: RenderBody, request: Request):
 
 class TestBody(BaseModel):
     variables: Optional[dict] = {}
-    provider: Optional[str] = "nyquest-router"
-    providers: Optional[List[str]] = None
+    model: Optional[str] = None
+    models: Optional[List[str]] = None
+    provider: Optional[str] = None  # legacy
+    providers: Optional[List[str]] = None  # legacy
     test_case_id: Optional[str] = None
     save: Optional[bool] = True
 
 
-def _run_one(prompt, provider, variables, test_case, owner, save):
-    r = renderer.render_prompt(prompt, variables)
-    res = mockmodels.run(provider, r["combined"], variables, prompt.get("model_settings"))
+async def _run_one(prompt, model_id, variables, test_case, owner, save):
+    res = await runner.run(model_id, prompt, variables)
     ev = evaluator.evaluate(res["output"], prompt, test_case)
     res["evaluation"] = ev
-    if save:
+    if save and not res.get("error"):
+        rendered = renderer.render_prompt(prompt, variables)["combined"]
         res["run_id"] = db.log_test_run(prompt["id"], {
             "prompt_version_id": None, "test_case_id": (test_case or {}).get("id"),
             "provider": res["provider"], "model": res["model"], "input_variables": variables,
-            "rendered_prompt": r["combined"], "output": res["output"], "metrics": res["metrics"],
+            "rendered_prompt": rendered, "output": res["output"], "metrics": res["metrics"],
             "evaluation": ev, "latency_ms": res["latency_ms"], "cost_estimate": res["cost_estimate"],
             "token_estimate": res["token_estimate"]}, owner)
     return res
 
 
 @app.post("/api/prompts/{pid}/test")
-def test_prompt(pid: str, body: TestBody, request: Request):
-    p = db.get_prompt(pid, owner_of(request))
+async def test_prompt(pid: str, body: TestBody, request: Request):
+    owner = require_owner(request)  # runs cost money → require sign-in
+    llm.set_relay_auth(relay_key(request))  # bill the signed-in user's own wallet
+    p = db.get_prompt(pid, owner)
     if not p:
         raise HTTPException(404, "not_found")
     tc = next((t for t in db.list_test_cases(pid) if t["id"] == body.test_case_id), None) if body.test_case_id else None
     variables = body.variables or (tc or {}).get("input_variables") or {}
-    return _run_one(p, body.provider or "nyquest-router", variables, tc, owner_of(request), body.save)
+    model = body.model or body.provider or (p.get("model_settings") or {}).get("model") or "auto"
+    return await _run_one(p, model, variables, tc, owner, body.save)
 
 
 @app.post("/api/prompts/{pid}/compare")
-def compare_prompt(pid: str, body: TestBody, request: Request):
-    p = db.get_prompt(pid, owner_of(request))
+async def compare_prompt(pid: str, body: TestBody, request: Request):
+    owner = require_owner(request)
+    llm.set_relay_auth(relay_key(request))
+    p = db.get_prompt(pid, owner)
     if not p:
         raise HTTPException(404, "not_found")
     tc = next((t for t in db.list_test_cases(pid) if t["id"] == body.test_case_id), None) if body.test_case_id else None
     variables = body.variables or (tc or {}).get("input_variables") or {}
-    provs = body.providers or [pr["key"] for pr in mockmodels.PROVIDERS]
+    models = body.models or body.providers or await llm.featured_models()
     rendered = renderer.render_prompt(p, variables)
-    results = [_run_one(p, pk, variables, tc, owner_of(request), body.save) for pk in provs]
+    results = []
+    for m in models:
+        results.append(await _run_one(p, m, variables, tc, owner, body.save))
     return {"rendered": rendered, "results": results}
 
 
@@ -333,9 +344,10 @@ def test_runs(pid: str):
     return {"runs": db.list_test_runs(pid)}
 
 
-@app.get("/api/providers")
-def providers():
-    return {"providers": [{"key": p["key"], "label": p["label"], "model": p["model"]} for p in mockmodels.PROVIDERS]}
+@app.get("/api/models")
+async def models():
+    return {"models": await llm.list_models(), "featured": await llm.featured_models(),
+            "live": llm.has_key() and runner.REAL}
 
 
 # ---- test cases ---------------------------------------------------------

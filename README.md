@@ -8,9 +8,10 @@ Prompter is Nyquest's prompt lifecycle control plane: manage prompts like softwa
 versioned, tested, approved, deployed, monitored, and reusable across Nyquest agents,
 workflows, and customer deployments.
 
-> **Access — Nyquest.** Your Nyquest account is your ZoidLab login. Seed content is public;
-> creating, editing, and approving prompts require signing in with Nyquest (a **Pro or Teams**
-> plan). One `.zoidlab.ai` session is shared across every ZoidLab app.
+> **Access — Nyquest Pro.** Prompter is a Pro workspace: sign in with your Nyquest account
+> (a **Pro or Teams** plan is required; the whole app is gated). Model runs route through **your
+> own Nyquest models and bill your own wallet** — and you pick which model to test and compare.
+> One `.zoidlab.ai` session is shared across every ZoidLab app.
 
 ## The core workflow
 
