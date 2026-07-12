@@ -1,0 +1,50 @@
+# Local dev for ZoidLab Prompter.
+#   docker compose up --build
+# The prototype persists to SQLite (a Docker volume). Postgres + Redis are
+# declared for the production path; enable with the "full" profile.
+services:
+  backend:
+    build: ./backend
+    environment:
+      - BUILDER_SESSION_SECRET=${BUILDER_SESSION_SECRET:-change-me}
+      - ENABLE_MOCK_MODELS=${ENABLE_MOCK_MODELS:-true}
+      - PROMPTER_ADMINS=${PROMPTER_ADMINS:-}
+      - DATA_DIR=/data
+    volumes:
+      - prompter_data:/data
+    ports:
+      - "8400:8400"
+
+  frontend:
+    build: ./frontend
+    environment:
+      - PROMPTER_API_URL=http://backend:8400
+      - BUILDER_SESSION_SECRET=${BUILDER_SESSION_SECRET:-change-me}
+      - NYQUEST_API=${NYQUEST_API:-https://api.nyquest.ai}
+      - SESSION_COOKIE_DOMAIN=${SESSION_COOKIE_DOMAIN:-.zoidlab.ai}
+    ports:
+      - "3400:3400"
+    depends_on:
+      - backend
+
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["full"]
+    environment:
+      - POSTGRES_USER=zoidlab
+      - POSTGRES_PASSWORD=zoidlab
+      - POSTGRES_DB=zoidlab_prompter
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["full"]
+    ports:
+      - "6379:6379"
+
+volumes:
+  prompter_data:
+  pg_data:
