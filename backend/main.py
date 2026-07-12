@@ -300,7 +300,12 @@ class TestBody(BaseModel):
 
 async def _run_one(prompt, model_id, variables, test_case, owner, save):
     res = await runner.run(model_id, prompt, variables)
-    ev = evaluator.evaluate(res["output"], prompt, test_case)
+    # real LLM-as-judge on live runs (billed to the same wallet as the run); real
+    # keyword/JSON signals on mock runs
+    if res.get("live") and llm.has_key():
+        ev = await evaluator.judge(res["output"], prompt, test_case)
+    else:
+        ev = evaluator.evaluate(res["output"], prompt, test_case)
     res["evaluation"] = ev
     if save and not res.get("error"):
         rendered = renderer.render_prompt(prompt, variables)["combined"]

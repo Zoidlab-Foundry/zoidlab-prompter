@@ -54,7 +54,7 @@ export default function TestLab() {
         <span className={`rounded-full border px-2 py-0.5 text-[10px] ${billing === "user" ? "border-ok/40 bg-ok/10 text-ok" : billing === "owner" ? "border-cy/40 bg-cy/10 text-cy" : "border-warn/40 bg-warn/10 text-warn"}`}>{billing === "user" ? "live Nyquest models · billed to your wallet" : billing === "owner" ? "live models · billed to the workspace key" : "mock models · no billing"}</span>
       </div>
       <p className="mt-1 text-[13px] text-dim">Run the prompt across the Nyquest models you pick and compare output, cost, latency, and quality side by side.</p>
-      <p className="mt-2 inline-block rounded-md border border-warn/40 bg-warn/10 px-2.5 py-1 text-[11.5px] text-warn">Scoring note — <b>keyword match</b> and <b>JSON validity</b> are measured from your test case. <b>quality</b>, <b>safety</b> and <b>eval overall</b> are heuristic estimates, not a real evaluation model.</p>
+      <p className="mt-2 inline-block rounded-md border border-ok/40 bg-ok/10 px-2.5 py-1 text-[11.5px] text-ok">Scoring — on <b>live</b> runs a model grades each output (clarity, accuracy, completeness, instruction-following, safety) with a rationale; <b>mock</b> runs show the real keyword / JSON checks only.</p>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-[300px_1fr]">
         <div className="space-y-3">
@@ -97,12 +97,13 @@ export default function TestLab() {
                     <span className="truncate text-[13px] font-semibold text-ink" title={r.model}>{r.label}</span>
                     <span className="rounded-full bg-ok/10 px-2 py-0.5 text-[10px] text-ok">eval {r.evaluation?.overall ?? "—"}</span>
                   </div>
-                  <p className="mb-3 max-h-56 overflow-auto whitespace-pre-wrap text-[12px] leading-relaxed text-dim">{r.output}</p>
+                  <p className="mb-2 max-h-56 overflow-auto whitespace-pre-wrap text-[12px] leading-relaxed text-dim">{r.output}</p>
+                  {(r.evaluation as any)?.rationale && <p className="mb-2 text-[11px] italic text-faint">⚖ {(r.evaluation as any).rationale}</p>}
                   <div className="mt-auto grid grid-cols-3 gap-1.5 border-t border-line pt-3 text-center text-[10px]">
                     <Metric label="latency" value={`${r.latency_ms}ms`} />
                     <Metric label="cost" value={`$${(r.cost_estimate || 0).toFixed(4)}`} />
                     <Metric label="tokens" value={`${r.token_estimate}`} />
-                    <Metric label="quality" value={r.metrics?.quality_score != null ? `${r.metrics.quality_score}` : "—"} />
+                    <Metric label="accuracy" value={(r.evaluation as any)?.accuracy != null ? `${(r.evaluation as any).accuracy}` : "—"} />
                     <Metric label="kw match" value={`${r.evaluation?.keyword_match ?? "—"}`} />
                     <Metric label="safety" value={`${r.evaluation?.safety ?? "—"}`} />
                   </div>

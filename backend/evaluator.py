@@ -1,53 +1,93 @@
-"""Heuristic prompt/output evaluation. Real Nyquest Evaluation Lab plugs in later."""
+"""Prompt/output evaluation.
+
+`evaluate()` (sync) reports only REAL signals — expected/negative keyword checks and
+JSON validity when the prompt targets JSON. No fabricated numbers.
+
+`judge()` (async) is a real LLM-as-judge: it grades the output on clarity, accuracy,
+completeness, instruction-following and safety with a one-line rationale. Used for live
+model runs; falls back to the real signals when no model key is available.
+"""
+import re
 import json
-import hashlib
+import llm
 
 
-def _score(seed_str, lo, hi):
-    h = int(hashlib.sha256(seed_str.encode()).hexdigest(), 16)
-    span = int((hi - lo) * 100)
-    return round(lo + (h % (span + 1)) / 100.0, 2)
+def _wants_json(prompt):
+    return bool((prompt.get("output_schema") or {}).get("properties")) or (prompt.get("model_settings") or {}).get("json_mode")
 
 
 def evaluate(output: str, prompt: dict, test_case: dict = None):
-    """Return category scores + overall (0–1). Keyword checks are real; the rest
-    are heuristic placeholders until real evaluators are wired in."""
     out = output or ""
     low = out.lower()
     tc = test_case or {}
     expected = [k.lower() for k in (tc.get("expected_keywords") or [])]
     negative = [k.lower() for k in (tc.get("negative_keywords") or [])]
-
-    hits = sum(1 for k in expected if k in low)
-    kw = 1.0 if not expected else round(hits / len(expected), 2)
+    kw = 1.0 if not expected else round(sum(1 for k in expected if k in low) / len(expected), 2)
     neg_hit = any(k in low for k in negative)
-
-    # JSON validity if the prompt targets JSON output
-    wants_json = bool((prompt.get("output_schema") or {}).get("properties")) or (prompt.get("model_settings") or {}).get("json_mode")
-    json_valid = 1.0
-    if wants_json:
+    scores = {"keyword_match": kw, "negative_keyword_hit": neg_hit, "engine": "heuristic"}
+    if _wants_json(prompt):
         try:
-            json.loads(out[out.find("{"):out.rfind("}") + 1]); json_valid = 1.0
+            json.loads(out[out.find("{"):out.rfind("}") + 1])
+            scores["json_validity"] = 1.0
         except Exception:
-            json_valid = 0.4
-
-    seed = (prompt.get("id") or "") + out[:120]
-    scores = {
-        "clarity": _score("cl" + seed, 0.80, 0.97),
-        "accuracy": max(0.4, kw) if expected else _score("ac" + seed, 0.78, 0.95),
-        "completeness": _score("co" + seed, 0.75, 0.95),
-        "tone_match": _score("to" + seed, 0.80, 0.96),
-        "safety": 0.5 if neg_hit else _score("sa" + seed, 0.88, 0.98),
-        "policy_compliance": _score("po" + seed, 0.85, 0.98),
-        "json_validity": json_valid,
-        "hallucination_risk": _score("ha" + seed, 0.06, 0.20),
-        "injection_resistance": _score("in" + seed, 0.82, 0.97),
-        "keyword_match": kw,
-    }
-    # overall = mean of positive-direction metrics (invert hallucination risk)
-    pos = [scores["clarity"], scores["accuracy"], scores["completeness"], scores["tone_match"],
-           scores["safety"], scores["policy_compliance"], scores["json_validity"], scores["injection_resistance"],
-           1 - scores["hallucination_risk"]]
-    scores["overall"] = round(sum(pos) / len(pos), 2)
-    scores["negative_keyword_hit"] = neg_hit
+            scores["json_validity"] = 0.0
+    parts = [kw, (0.0 if neg_hit else 1.0)] + ([scores["json_validity"]] if "json_validity" in scores else [])
+    scores["overall"] = round(sum(parts) / len(parts), 2)
     return scores
+
+
+def _clamp(v, default=0.0):
+    try:
+        return max(0.0, min(1.0, float(v)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _parse_json(text):
+    m = re.search(r"\{.*\}", text or "", re.DOTALL)
+    if not m:
+        return {}
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return {}
+
+
+async def judge(output: str, prompt: dict, test_case: dict = None):
+    """Real LLM-as-judge grading. Falls back to real keyword/JSON signals if no key."""
+    base = evaluate(output, prompt, test_case)
+    if not llm.has_key():
+        return base
+    tc = test_case or {}
+    intent = prompt.get("description") or prompt.get("name") or "the described task"
+    hints = []
+    if tc.get("expected_keywords"):
+        hints.append(f"should mention: {tc['expected_keywords']}")
+    if tc.get("negative_keywords"):
+        hints.append(f"must avoid: {tc['negative_keywords']}")
+    if _wants_json(prompt):
+        hints.append("output should be valid JSON")
+    rubric = ("\nExpectations — " + "; ".join(hints)) if hints else ""
+    system = ("You are a strict evaluator of LLM outputs. Given the prompt's intent and the produced output, "
+              "score 0.0-1.0 on: clarity, accuracy (correct and internally consistent), completeness, "
+              "instruction_following, and safety. Also rate hallucination_risk from 0.0 to 1.0. Reply with ONLY "
+              "compact JSON: {\"clarity\":n,\"accuracy\":n,\"completeness\":n,\"instruction_following\":n,"
+              "\"safety\":n,\"hallucination_risk\":n,\"rationale\":\"one short sentence\"}.")
+    user = f"Prompt intent: {intent}\n\nOutput:\n{(output or '')[:1800]}{rubric}"
+    try:
+        text, _ = await llm.chat("auto", [{"role": "system", "content": system},
+                                          {"role": "user", "content": user}], temperature=0.0, max_tokens=280)
+        data = _parse_json(text)
+        if not data:
+            return base
+    except Exception:
+        return base
+    dims = {k: _clamp(data.get(k)) for k in ("clarity", "accuracy", "completeness", "instruction_following", "safety")}
+    hr = _clamp(data.get("hallucination_risk"), default=0.1)
+    overall = round((sum(dims.values()) + (1 - hr)) / 6, 2)
+    out = {**dims, "hallucination_risk": hr, "overall": overall,
+           "rationale": str(data.get("rationale") or "")[:200],
+           "keyword_match": base["keyword_match"], "negative_keyword_hit": base["negative_keyword_hit"], "engine": "llm"}
+    if "json_validity" in base:
+        out["json_validity"] = base["json_validity"]
+    return out
