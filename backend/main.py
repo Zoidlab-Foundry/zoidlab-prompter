@@ -363,6 +363,71 @@ async def models(request: Request):
             "live": live, "billing": billing}
 
 
+# ---- deploy: serve a prompt as a live API --------------------------------
+class PromptDeployBody(BaseModel):
+    model: Optional[str] = None
+
+
+@app.get("/api/prompts/{pid}/deployment")
+def get_prompt_deployment(pid: str, request: Request):
+    if not db.get_prompt(pid, owner_of(request)):
+        raise HTTPException(404, "not_found")
+    return {"deployment": db.get_prompt_deployment(pid)}
+
+
+@app.post("/api/prompts/{pid}/deploy")
+def deploy_prompt_endpoint(pid: str, body: PromptDeployBody, request: Request):
+    owner = require_owner(request)
+    p = db.get_prompt(pid, owner)
+    if not p:
+        raise HTTPException(404, "not_found")
+    p.pop("badges", None)
+    settings = {"prompt": p, "model": body.model or (p.get("model_settings") or {}).get("model") or "auto"}
+    dep = db.deploy_prompt(pid, owner, relay_key(request), settings)
+    return {"ok": True, "deployment": dep, "path": f"/api/prompt-endpoint/{dep['token']}/run"}
+
+
+@app.delete("/api/prompts/{pid}/deploy")
+def undeploy_prompt_endpoint(pid: str, request: Request):
+    require_owner(request)
+    if not db.get_prompt(pid, owner_of(request)):
+        raise HTTPException(404, "not_found")
+    db.undeploy_prompt(pid)
+    return {"ok": True}
+
+
+# Public — the unguessable token IS the credential.
+@app.get("/api/prompt-endpoint/{token}")
+def prompt_endpoint_info(token: str):
+    dep = db.prompt_deployment_by_token(token)
+    if not dep:
+        raise HTTPException(404, "unknown_or_disabled_endpoint")
+    s = db._pj(dep.get("settings"), {}) or {}
+    p = s.get("prompt") or {}
+    return {"ok": True, "prompt": p.get("name"), "variables": [v.get("name") for v in (p.get("variables") or [])],
+            "calls": dep["call_count"], "usage": "POST {\"variables\": {...}} to this path + /run."}
+
+
+class PromptRunBody(BaseModel):
+    variables: Optional[dict] = {}
+
+
+@app.post("/api/prompt-endpoint/{token}/run")
+async def prompt_endpoint_run(token: str, body: PromptRunBody):
+    dep = db.prompt_deployment_by_token(token)
+    if not dep:
+        raise HTTPException(404, "unknown_or_disabled_endpoint")
+    s = db._pj(dep.get("settings"), {}) or {}
+    p = s.get("prompt")
+    if not p:
+        raise HTTPException(404, "prompt_snapshot_missing")
+    llm.set_relay_auth(dep.get("relay_key"))  # bill the deployer's own wallet
+    res = await runner.run(s.get("model", "auto"), p, body.variables or {})
+    db.bump_prompt_deployment(token)
+    return {"output": res["output"], "model": res.get("model"), "billing": res.get("billing"),
+            "metrics": res.get("metrics")}
+
+
 # ---- test cases ---------------------------------------------------------
 class TestCaseBody(BaseModel):
     name: str

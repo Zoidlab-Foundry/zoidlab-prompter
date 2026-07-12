@@ -58,6 +58,9 @@ export const api = {
     req<{ ok: boolean; prompt: Prompt }>(`/api/templates/${tid}/use${projectId ? "?project_id=" + projectId : ""}`, { method: "POST" }),
 
   audit: (id: string) => req<{ audit: any[] }>(`/api/prompts/${id}/audit`).then((d) => d.audit),
+  promptDeployment: (id: string) => req<{ deployment: any }>(`/api/prompts/${id}/deployment`).then((d) => d.deployment),
+  deployPrompt: (id: string, b: any = {}) => req<{ ok: boolean; deployment: any; path: string }>(`/api/prompts/${id}/deploy`, { method: "POST", body: JSON.stringify(b) }),
+  undeployPrompt: (id: string) => req<{ ok: boolean }>(`/api/prompts/${id}/deploy`, { method: "DELETE" }),
   exportJsonUrl: (id: string) => `/api/prompts/${id}/export/json`,
   exportMdUrl: (id: string) => `/api/prompts/${id}/export/markdown`,
 };

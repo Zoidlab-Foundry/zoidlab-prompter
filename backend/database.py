@@ -101,6 +101,11 @@ def init():
                 actor_user_id TEXT, details TEXT, created_at TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_logs(entity_type, entity_id, created_at);
+            CREATE TABLE IF NOT EXISTS prompt_deployments (
+                id TEXT PRIMARY KEY, prompt_id TEXT UNIQUE, owner_user_id TEXT, token TEXT UNIQUE,
+                relay_key TEXT, settings TEXT, enabled INTEGER DEFAULT 1, call_count INTEGER DEFAULT 0,
+                last_called_at TEXT, created_at TEXT, updated_at TEXT );
+            CREATE INDEX IF NOT EXISTS idx_pdeploy_token ON prompt_deployments(token);
             """
         )
         # idempotent migration for older DBs
@@ -542,3 +547,54 @@ def counts_by(field, viewer=None):
     with _conn() as c:
         rows = c.execute(f"SELECT {field} v, COUNT(*) c FROM prompts WHERE template=0 AND {_visible()} GROUP BY {field}", (viewer,)).fetchall()
     return [{"name": r["v"], "count": r["c"]} for r in rows if r["v"]]
+
+
+# --- deployments (prompt served as a live API) -------------------------
+def _pdeployment_out(r):
+    if not r:
+        return None
+    d = dict(r)
+    d["settings"] = _pj(d.get("settings"), {})
+    d["enabled"] = bool(d["enabled"])
+    d.pop("relay_key", None)
+    return d
+
+
+def deploy_prompt(pid, owner, relay_key, settings):
+    now = now_iso()
+    with _conn() as c:
+        ex = c.execute("SELECT id, token FROM prompt_deployments WHERE prompt_id=?", (pid,)).fetchone()
+        token = ex["token"] if ex else uuid.uuid4().hex
+        if ex:
+            c.execute("UPDATE prompt_deployments SET owner_user_id=?, relay_key=?, settings=?, enabled=1, updated_at=? WHERE id=?",
+                      (owner, relay_key, _j(settings), now, ex["id"]))
+        else:
+            c.execute("""INSERT INTO prompt_deployments (id,prompt_id,owner_user_id,token,relay_key,settings,enabled,call_count,created_at,updated_at)
+                         VALUES (?,?,?,?,?,?,1,0,?,?)""", (new_id("dep"), pid, owner, token, relay_key, _j(settings), now, now))
+    return get_prompt_deployment(pid)
+
+
+def get_prompt_deployment(pid):
+    with _conn() as c:
+        r = c.execute("SELECT * FROM prompt_deployments WHERE prompt_id=?", (pid,)).fetchone()
+    out = _pdeployment_out(r)
+    if out:
+        out["token"] = r["token"]
+    return out
+
+
+def prompt_deployment_by_token(token):
+    with _conn() as c:
+        r = c.execute("SELECT * FROM prompt_deployments WHERE token=? AND enabled=1", (token,)).fetchone()
+    return dict(r) if r else None
+
+
+def undeploy_prompt(pid):
+    with _conn() as c:
+        c.execute("UPDATE prompt_deployments SET enabled=0, updated_at=? WHERE prompt_id=?", (now_iso(), pid))
+    return True
+
+
+def bump_prompt_deployment(token):
+    with _conn() as c:
+        c.execute("UPDATE prompt_deployments SET call_count=call_count+1, last_called_at=? WHERE token=?", (now_iso(), token))
