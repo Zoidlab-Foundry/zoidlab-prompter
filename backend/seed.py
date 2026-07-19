@@ -1,6 +1,6 @@
 """Seed 10 prompt templates + example projects and prompts (owner NULL = visible
 to everyone). Idempotent: skips if templates already exist."""
-import database as db
+import db_pg as db
 
 
 def _v(name, typ, required, desc, example):
