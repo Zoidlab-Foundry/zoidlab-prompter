@@ -19,10 +19,10 @@ MANIFEST = {
     "pages": [
         page("/", "Dashboard", "Overview: prompt counts, recent activity, approvals waiting."),
         page("/prompts", "Library", "All prompts with category, risk and status filters.",
-             assists={"new-prompt": "the New prompt button"}),
+             assists={"new-prompt": "the Create Prompt button"}),
         page("/prompts/[id]", "Editor", "Edit a prompt's sections and variables; snapshot versions."),
         page("/prompts/[id]/test", "Test Lab", "Run the prompt against real models with sample variables.",
-             assists={"run-test": "the Run test button"}),
+             assists={"run-test": "the Compare models button"}),
         page("/approvals", "Approvals", "Review queue — approve or reject prompts (human decision only)."),
         page("/templates", "Templates", "Start from a curated template."),
     ],

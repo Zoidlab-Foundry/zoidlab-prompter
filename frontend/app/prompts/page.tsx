@@ -40,7 +40,7 @@ function Library() {
           <h1 className="text-[22px] font-semibold">Prompt Library</h1>
           <p className="mt-1 text-[13px] text-dim">Every prompt asset — versioned, tested, governed, deployable.</p>
         </div>
-        <button onClick={() => setNewOpen(true)} className="rounded-lg bg-vi px-4 py-2 text-[13px] font-semibold text-white hover:opacity-90">Create Prompt</button>
+        <button data-assist="new-prompt" onClick={() => setNewOpen(true)} className="rounded-lg bg-vi px-4 py-2 text-[13px] font-semibold text-white hover:opacity-90">Create Prompt</button>
       </div>
 
       <div className="mb-5 flex flex-col gap-3">

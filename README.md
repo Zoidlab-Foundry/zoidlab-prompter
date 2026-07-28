@@ -31,8 +31,9 @@ workflows, and customer deployments.
 Aligned to the ZoidLab platform standard (same as Builder / Marketplace / Foundry):
 
 - **Frontend** — Next.js 15, React 19, TypeScript, TailwindCSS (dark by default)
-- **Backend** — FastAPI (Python), SQLite (Postgres-portable — all access behind `database.py`;
-  JSONB columns stored as JSON text)
+- **Backend** — FastAPI (Python), Postgres with per-tenant FORCE row-level security (all access
+  behind `db_pg.py`; every query runs as the non-superuser `app_rls` role keyed on
+  `app.current_owner`, so tenant isolation is enforced by the database, not by application code)
 - **Auth** — shared ZoidLab / Nyquest SSO cookie (`zb_session`)
 - **Deploy** — systemd + Cloudflare Tunnel (`prompter-api` :8400, `prompter-web` :3400)
 
@@ -51,7 +52,8 @@ npm install
 npm run dev                    # http://localhost:3400
 ```
 
-Or with Docker: `docker compose up --build` (frontend :3400, backend :8400, SQLite volume).
+Or with Docker: `docker compose up --build` (frontend :3400, backend :8400). The backend needs
+the shared `foundry-infra` Postgres — set `DATABASE_URL` / `DATABASE_URL_ADMIN`.
 
 ## Environment
 

@@ -82,7 +82,7 @@ export default function TestLab() {
               <option value="">+ Add another model…</option>
               {allModels.filter((m) => !sel.includes(m)).map((m) => <option key={m} value={m}>{m}</option>)}
             </select>
-            <button onClick={run} disabled={running || !sel.length} className="mt-3 w-full rounded-lg bg-vi px-4 py-2 text-[13px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{running ? "Running…" : `Compare ${sel.length} model${sel.length === 1 ? "" : "s"}`}</button>
+            <button data-assist="run-test" onClick={run} disabled={running || !sel.length} className="mt-3 w-full rounded-lg bg-vi px-4 py-2 text-[13px] font-semibold text-white hover:opacity-90 disabled:opacity-50">{running ? "Running…" : `Compare ${sel.length} model${sel.length === 1 ? "" : "s"}`}</button>
           </div>
         </div>
 
