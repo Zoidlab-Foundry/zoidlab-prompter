@@ -31,6 +31,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="ZoidLab Prompter API", lifespan=lifespan)
 
+from foundry_common import assistant
+from assistant_manifest import MANIFEST
+app.include_router(assistant.make_router(MANIFEST))
+
 
 def require_owner(request: Request):
     """Every write / model run requires a signed-in Nyquest Pro user (backend-enforced,
