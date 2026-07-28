@@ -1,19 +1,29 @@
-# Local dev for ZoidLab Prompter.
+# Local dev for ZoidLab Prompter (Prompt Studio).
 #   docker compose up --build
-# The prototype persists to SQLite (a Docker volume). Postgres + Redis are
-# declared for the production path; enable with the "full" profile.
+# Self-contained: Postgres comes up first and ./initdb.sql creates the RLS roles
+# (foundry owns the schema, app_rls is the NOBYPASSRLS role every request runs as),
+# then the backend opens its psycopg pool against it at import. Point
+# DATABASE_URL / DATABASE_URL_ADMIN elsewhere to use the shared Foundry Postgres.
 services:
   backend:
     build: ./backend
     environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql://app_rls:app_rls@postgres:5432/prompter}
+      - DATABASE_URL_ADMIN=${DATABASE_URL_ADMIN:-postgresql://foundry:foundry@postgres:5432/prompter}
       - BUILDER_SESSION_SECRET=${BUILDER_SESSION_SECRET:-change-me}
-      - ENABLE_MOCK_MODELS=${ENABLE_MOCK_MODELS:-true}
+      - NYQUEST_API_KEY=${NYQUEST_API_KEY:-}
+      - FOUNDRY_GATE_ENABLED=${FOUNDRY_GATE_ENABLED:-true}
+      - FOUNDRY_REQUIRED_PLAN=${FOUNDRY_REQUIRED_PLAN:-pro}
+      - MOCK_PRO_USER=${MOCK_PRO_USER:-false}
       - PROMPTER_ADMINS=${PROMPTER_ADMINS:-}
-      - DATA_DIR=/data
-    volumes:
-      - prompter_data:/data
+      - ENABLE_MOCK_MODELS=${ENABLE_MOCK_MODELS:-true}
+      - ENABLE_REAL_MODEL_ROUTING=${ENABLE_REAL_MODEL_ROUTING:-false}
+      - PROMPTER_DEFAULT_MODEL=${PROMPTER_DEFAULT_MODEL:-}
     ports:
       - "8400:8400"
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   frontend:
     build: ./frontend
@@ -27,24 +37,22 @@ services:
     depends_on:
       - backend
 
+  # Not published to the host: the backend reaches it over the compose network, so
+  # `docker compose up` never collides with a Postgres already running locally.
   postgres:
     image: postgres:16-alpine
-    profiles: ["full"]
     environment:
-      - POSTGRES_USER=zoidlab
-      - POSTGRES_PASSWORD=zoidlab
-      - POSTGRES_DB=zoidlab_prompter
+      - POSTGRES_USER=foundry
+      - POSTGRES_PASSWORD=foundry
+      - POSTGRES_DB=prompter
     volumes:
       - pg_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-
-  redis:
-    image: redis:7-alpine
-    profiles: ["full"]
-    ports:
-      - "6379:6379"
+      - ./initdb.sql:/docker-entrypoint-initdb.d/10-foundry-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U foundry -d prompter"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
 volumes:
-  prompter_data:
   pg_data:
