@@ -216,13 +216,14 @@ def create_prompt(body: PromptBody, request: Request):
 
 @app.get("/api/prompts/{pid}")
 def get_prompt(pid: str, request: Request):
-    p = db.get_prompt(pid, owner_of(request))
+    v = owner_of(request)
+    p = db.get_prompt(pid, v)
     if not p:
         raise HTTPException(404, "not_found")
-    p["versions"] = db.list_versions(pid)
-    p["test_cases"] = db.list_test_cases(pid)
-    p["project"] = db.get_project(p["project_id"], owner_of(request)) if p.get("project_id") else None
-    p["latest_runs"] = db.list_test_runs(pid, limit=8)
+    p["versions"] = db.list_versions(pid, v)
+    p["test_cases"] = db.list_test_cases(pid, v)
+    p["project"] = db.get_project(p["project_id"], v) if p.get("project_id") else None
+    p["latest_runs"] = db.list_test_runs(pid, limit=8, viewer=v)
     return deco(p)
 
 
@@ -261,8 +262,8 @@ class VersionBody(BaseModel):
 
 
 @app.get("/api/prompts/{pid}/versions")
-def list_versions(pid: str):
-    return {"versions": db.list_versions(pid)}
+def list_versions(pid: str, request: Request):
+    return {"versions": db.list_versions(pid, owner_of(request))}
 
 
 @app.post("/api/prompts/{pid}/versions")
@@ -275,8 +276,8 @@ def save_version(pid: str, body: VersionBody, request: Request):
 
 
 @app.get("/api/versions/{vid}")
-def get_version(vid: str):
-    v = db.get_version(vid)
+def get_version(vid: str, request: Request):
+    v = db.get_version(vid, owner_of(request))
     if not v:
         raise HTTPException(404, "not_found")
     return v
@@ -292,16 +293,17 @@ def restore_version(pid: str, vid: str, request: Request):
 
 
 @app.get("/api/prompts/{pid}/versions/{vid}/diff")
-def version_diff(pid: str, vid: str, against: Optional[str] = None):
-    new = db.get_version(vid)
+def version_diff(pid: str, request: Request, vid: str, against: Optional[str] = None):
+    v = owner_of(request)
+    new = db.get_version(vid, v)
     if not new:
         raise HTTPException(404, "not_found")
     if against:
-        old = db.get_version(against)
+        old = db.get_version(against, v)
     else:
-        vers = db.list_versions(pid)
+        vers = db.list_versions(pid, v)
         idx = next((i for i, x in enumerate(vers) if x["id"] == vid), None)
-        old = db.get_version(vers[idx + 1]["id"]) if idx is not None and idx + 1 < len(vers) else {}
+        old = db.get_version(vers[idx + 1]["id"], v) if idx is not None and idx + 1 < len(vers) else {}
     return diffutil.diff(old or {}, new)
 
 
@@ -355,7 +357,7 @@ async def test_prompt(pid: str, body: TestBody, request: Request):
     p = db.get_prompt(pid, owner)
     if not p:
         raise HTTPException(404, "not_found")
-    tc = next((t for t in db.list_test_cases(pid) if t["id"] == body.test_case_id), None) if body.test_case_id else None
+    tc = next((t for t in db.list_test_cases(pid, owner) if t["id"] == body.test_case_id), None) if body.test_case_id else None
     variables = body.variables or (tc or {}).get("input_variables") or {}
     model = body.model or body.provider or (p.get("model_settings") or {}).get("model") or "auto"
     return await _run_one(p, model, variables, tc, owner, body.save)
@@ -368,7 +370,7 @@ async def compare_prompt(pid: str, body: TestBody, request: Request):
     p = db.get_prompt(pid, owner)
     if not p:
         raise HTTPException(404, "not_found")
-    tc = next((t for t in db.list_test_cases(pid) if t["id"] == body.test_case_id), None) if body.test_case_id else None
+    tc = next((t for t in db.list_test_cases(pid, owner) if t["id"] == body.test_case_id), None) if body.test_case_id else None
     variables = body.variables or (tc or {}).get("input_variables") or {}
     models = body.models or body.providers or await llm.featured_models()
     rendered = renderer.render_prompt(p, variables)
@@ -379,8 +381,8 @@ async def compare_prompt(pid: str, body: TestBody, request: Request):
 
 
 @app.get("/api/prompts/{pid}/test-runs")
-def test_runs(pid: str):
-    return {"runs": db.list_test_runs(pid)}
+def test_runs(pid: str, request: Request):
+    return {"runs": db.list_test_runs(pid, viewer=owner_of(request))}
 
 
 @app.get("/api/models")
@@ -470,20 +472,24 @@ class TestCaseBody(BaseModel):
 
 
 @app.get("/api/prompts/{pid}/test-cases")
-def test_cases(pid: str):
-    return {"test_cases": db.list_test_cases(pid)}
+def test_cases(pid: str, request: Request):
+    return {"test_cases": db.list_test_cases(pid, owner_of(request))}
 
 
 @app.post("/api/prompts/{pid}/test-cases")
 def create_test_case(pid: str, body: TestCaseBody, request: Request):
     o = require_owner(request)
-    return {"ok": True, "test_case": db.create_test_case(pid, body.model_dump(), o)}
+    tc = db.create_test_case(pid, body.model_dump(), o)
+    if not tc:
+        raise HTTPException(404, "not_found")
+    return {"ok": True, "test_case": tc}
 
 
 @app.delete("/api/test-cases/{tid}")
 def delete_test_case(tid: str, request: Request):
-    require_owner(request)
-    db.delete_test_case(tid)
+    o = require_owner(request)
+    if not db.delete_test_case(tid, o):
+        raise HTTPException(404, "not_found")
     return {"ok": True}
 
 
@@ -561,21 +567,23 @@ def use_template(tid: str, request: Request, project_id: Optional[str] = None):
 # ---- export -------------------------------------------------------------
 @app.get("/api/prompts/{pid}/export/json")
 def export_json(pid: str, request: Request):
-    p = db.get_prompt(pid, owner_of(request))
+    v = owner_of(request)
+    p = db.get_prompt(pid, v)
     if not p:
         raise HTTPException(404, "not_found")
-    return exporter.to_package(p, db.list_test_cases(pid))
+    return exporter.to_package(p, db.list_test_cases(pid, v))
 
 
 @app.get("/api/prompts/{pid}/export/markdown")
 def export_markdown(pid: str, request: Request):
-    p = db.get_prompt(pid, owner_of(request))
+    v = owner_of(request)
+    p = db.get_prompt(pid, v)
     if not p:
         raise HTTPException(404, "not_found")
-    return PlainTextResponse(exporter.to_markdown(p, db.list_test_cases(pid)))
+    return PlainTextResponse(exporter.to_markdown(p, db.list_test_cases(pid, v)))
 
 
 # ---- audit --------------------------------------------------------------
 @app.get("/api/prompts/{pid}/audit")
-def prompt_audit(pid: str):
-    return {"audit": db.audit_for(pid)}
+def prompt_audit(pid: str, request: Request):
+    return {"audit": db.audit_for(pid, viewer=owner_of(request))}

@@ -4,8 +4,10 @@ Tenant isolation is enforced by the database, not just the app: prompt_projects,
 and prompt_deployments carry owner_user_id, have FORCE ROW LEVEL SECURITY, and a policy
 exposing only rows whose owner matches `app.current_owner` (set per transaction) or is
 NULL (shared seed / templates). Child tables (versions, test cases, test runs, approvals,
-audit logs) have no owner column — they are reached only through an RLS-protected prompt —
-so they carry no policy, matching the former sqlite scoping. Engine-internal paths (owner
+audit logs) have no owner column, so no policy can be keyed on them directly: instead every
+child accessor JOINs its RLS-protected parent inside the tenant transaction, which filters
+out rows whose prompt the caller cannot see (and preserves NULL-owner seed rows). That is
+why each of them takes a `viewer` — callers must pass it. Engine-internal paths (owner
 checks before guarded writes, the approval queue, and the deployed prompt-as-API token
 endpoint where the unguessable token IS the credential) go through admin_conn(), exactly
 mirroring the unfiltered reads the sqlite layer performed. Public API mirrors the former
@@ -176,9 +178,17 @@ def audit(entity_type, entity_id, action, actor, details=None):
                     (new_id("aud"), entity_type, entity_id, action, actor, _j(details or {}), now_iso()))
 
 
-def audit_for(entity_id, limit=50):
-    with _tx(None) as cur:
-        cur.execute("SELECT * FROM audit_logs WHERE entity_id=%s ORDER BY created_at DESC LIMIT %s", (entity_id, limit))
+def audit_for(entity_id, limit=50, viewer=None):
+    # audit_logs has no owner column, so the entity it describes is the tenancy key:
+    # every row written by audit() is either a prompt or a project, both RLS-protected.
+    # The EXISTS probes run inside the tenant transaction, so an entity the caller
+    # cannot see yields no audit rows at all.
+    with _tx(viewer) as cur:
+        cur.execute("""SELECT a.* FROM audit_logs a
+                       WHERE a.entity_id=%s
+                         AND (EXISTS (SELECT 1 FROM prompts p WHERE p.id=a.entity_id)
+                              OR EXISTS (SELECT 1 FROM prompt_projects pp WHERE pp.id=a.entity_id))
+                       ORDER BY a.created_at DESC LIMIT %s""", (entity_id, limit))
         rows = cur.fetchall()
     out = []
     for r in rows:
@@ -388,19 +398,24 @@ def save_version(pid, version, changelog, owner):
         _snapshot(c, pid, version, changelog or f"Saved {version}", owner)
         c.commit()
     audit("prompt", pid, f"version:{version}", owner)
-    return list_versions(pid)
+    return list_versions(pid, owner)
 
 
-def list_versions(pid):
-    with _tx(None) as cur:
-        cur.execute("SELECT id,version,changelog,status,created_by,created_at FROM prompt_versions WHERE prompt_id=%s ORDER BY created_at DESC", (pid,))
+def list_versions(pid, viewer=None):
+    # prompt_versions carries no owner column — the JOIN to the RLS-protected parent IS
+    # the tenant filter (seed prompts have owner_user_id NULL and stay visible to all).
+    with _tx(viewer) as cur:
+        cur.execute("""SELECT v.id,v.version,v.changelog,v.status,v.created_by,v.created_at
+                       FROM prompt_versions v JOIN prompts p ON p.id=v.prompt_id
+                       WHERE v.prompt_id=%s ORDER BY v.created_at DESC""", (pid,))
         rows = cur.fetchall()
     return [dict(r) for r in rows]
 
 
-def get_version(vid):
-    with _tx(None) as cur:
-        cur.execute("SELECT * FROM prompt_versions WHERE id=%s", (vid,))
+def get_version(vid, viewer=None):
+    with _tx(viewer) as cur:
+        cur.execute("""SELECT v.* FROM prompt_versions v JOIN prompts p ON p.id=v.prompt_id
+                       WHERE v.id=%s""", (vid,))
         r = cur.fetchone()
     if not r:
         return None
@@ -427,9 +442,10 @@ def restore_version(pid, vid, owner):
 
 
 # --- test cases / runs -------------------------------------------------
-def list_test_cases(pid):
-    with _tx(None) as cur:
-        cur.execute("SELECT * FROM prompt_test_cases WHERE prompt_id=%s ORDER BY created_at", (pid,))
+def list_test_cases(pid, viewer=None):
+    with _tx(viewer) as cur:
+        cur.execute("""SELECT t.* FROM prompt_test_cases t JOIN prompts p ON p.id=t.prompt_id
+                       WHERE t.prompt_id=%s ORDER BY t.created_at""", (pid,))
         rows = cur.fetchall()
     out = []
     for r in rows:
@@ -444,19 +460,26 @@ def list_test_cases(pid):
 
 def create_test_case(pid, data, owner):
     tid = new_id("tc"); now = now_iso()
-    with _tx(None) as cur:
+    with _tx(owner) as cur:
+        # the parent probe runs under RLS, so a prompt_id the caller cannot see inserts nothing
+        cur.execute("SELECT 1 FROM prompts WHERE id=%s", (pid,))
+        if not cur.fetchone():
+            return None
         cur.execute("""INSERT INTO prompt_test_cases (id,prompt_id,name,description,input_variables,expected_keywords,
                        negative_keywords,expected_schema,notes,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (tid, pid, data.get("name", "Test case"), data.get("description", ""),
                      _j(data.get("input_variables", {})), _j(data.get("expected_keywords", [])),
                      _j(data.get("negative_keywords", [])), _j(data.get("expected_schema", {})),
                      data.get("notes", ""), now, now))
-    return [t for t in list_test_cases(pid) if t["id"] == tid][0]
+    return next((t for t in list_test_cases(pid, owner) if t["id"] == tid), None)
 
 
-def delete_test_case(tid):
-    with _tx(None) as cur:
-        cur.execute("DELETE FROM prompt_test_cases WHERE id=%s", (tid,))
+def delete_test_case(tid, viewer=None):
+    """Delete through the RLS-protected parent: a test case whose prompt the caller
+    cannot see matches no row. Returns True only if something was actually removed."""
+    with _tx(viewer) as cur:
+        cur.execute("DELETE FROM prompt_test_cases t USING prompts p WHERE t.id=%s AND p.id=t.prompt_id", (tid,))
+        return cur.rowcount > 0
 
 
 def log_test_run(pid, data, owner):
@@ -473,9 +496,10 @@ def log_test_run(pid, data, owner):
     return rid
 
 
-def list_test_runs(pid, limit=50):
-    with _tx(None) as cur:
-        cur.execute("SELECT * FROM prompt_test_runs WHERE prompt_id=%s ORDER BY created_at DESC LIMIT %s", (pid, limit))
+def list_test_runs(pid, limit=50, viewer=None):
+    with _tx(viewer) as cur:
+        cur.execute("""SELECT r.* FROM prompt_test_runs r JOIN prompts p ON p.id=r.prompt_id
+                       WHERE r.prompt_id=%s ORDER BY r.created_at DESC LIMIT %s""", (pid, limit))
         rows = cur.fetchall()
     out = []
     for r in rows:
@@ -488,10 +512,12 @@ def list_test_runs(pid, limit=50):
 
 # --- approvals ---------------------------------------------------------
 def submit_approval(pid, owner):
-    p = get_prompt_raw(pid)
+    # scoped read (not get_prompt_raw): submitting someone else's prompt for approval —
+    # and clearing their pending row below — is a cross-tenant write.
+    p = get_prompt(pid, owner)
     if not p:
         return None
-    with _tx(None) as cur:
+    with _tx(owner) as cur:
         cur.execute("DELETE FROM prompt_approvals WHERE prompt_id=%s AND status='pending'", (pid,))
         cur.execute("""INSERT INTO prompt_approvals (id,prompt_id,prompt_version_id,submitted_by,status,submitted_at)
                        VALUES (%s,%s,%s,%s,'pending',%s)""",
@@ -580,7 +606,7 @@ def use_template(tid, owner, project_id=None):
     data["status"] = "draft"
     p = create_prompt(data, owner)
     # copy the template's test cases onto the new prompt
-    for tc in list_test_cases(t["id"]):
+    for tc in list_test_cases(t["id"], owner):
         create_test_case(p["id"], tc, owner)
     return p
 
