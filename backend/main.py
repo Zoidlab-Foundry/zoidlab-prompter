@@ -36,6 +36,32 @@ from assistant_manifest import MANIFEST
 app.include_router(assistant.make_router(MANIFEST))
 
 
+# Default-deny gate. Per-route decoration is not sufficient here: the Next middleware treats
+# /api as public and next.config rewrites it straight to this backend, so every route below is
+# reachable from the internet and the ONLY gate is this one. Routes that fetch a child record
+# (a version, a test run, an audit entry) by its own id previously took no Request at all and
+# so authenticated nothing — and those child tables do not carry row-level security, because
+# the schema assumed they were only ever reached through an RLS-protected parent. Gating by
+# default and naming the exceptions makes a missed route fail closed instead of public.
+_PUBLIC_PATHS = ("/api/health", "/api/models", "/api/templates", "/api/assistant/health")
+_PUBLIC_PREFIXES = ("/api/prompt-endpoint/",)   # token-authed by design, no session
+
+
+@app.middleware("http")
+async def _auth_gate(request: Request, call_next):
+    path = request.url.path
+    exempt = (request.method == "OPTIONS" or not path.startswith("/api")
+              or path in _PUBLIC_PATHS
+              or any(path.startswith(p) for p in _PUBLIC_PREFIXES))
+    if not exempt:
+        s = session(request)
+        if not s or not s.get("sub"):
+            return JSONResponse({"detail": "sign_in_required"}, status_code=401)
+        if not auth_is_pro(request):
+            return JSONResponse({"detail": "pro_required"}, status_code=403)
+    return await call_next(request)
+
+
 def require_owner(request: Request):
     """Every write / model run requires a signed-in Nyquest Pro user (backend-enforced,
     so the entitlement holds even if a request skips the frontend gate)."""
